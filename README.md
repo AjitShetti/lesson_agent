@@ -135,7 +135,6 @@ scripts/              judge_reliability.py, memory_experiment.py
 tests/                offline tests
 sample_run_real/      output of a real run: the passing lesson + rejection log
 DESIGN.md             every design choice and trade-off
-docs/LOOM_SCRIPT.md   the full spoken script for the Loom (what to say, start to finish)
 ```
 
 ## Before you submit: things only you can do
