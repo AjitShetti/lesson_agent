@@ -1,0 +1,9 @@
+{
+  "note": "What a trustworthy evaluator must do on the two hand-made test lessons.",
+  "good_lesson": {"must_pass": "all"},
+  "bad_lesson": {
+    "must_fail": ["sentence_length", "readability", "no_idioms", "jargon_defined", "claims_grounded",
+                  "key_points_covered", "lesson_length", "teaches_by_example", "required_sections"],
+    "should_ideally_fail": ["no_unexplained_terms"]
+  }
+}

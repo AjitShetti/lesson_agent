@@ -1,0 +1,78 @@
+{
+  "learner": "A 12th-grade graduate from India. Limited English vocabulary. Studied in a non-English-medium school. Starts from zero in AI. Wants to start an AI career.",
+  "pass_rule": "A lesson ships only when EVERY check passes. No partial credit.",
+  "checks": [
+    {
+      "id": "draft_nonempty", "type": "code", "dimension": "complete_draft",
+      "question": "Did the writer return lesson text?",
+      "params": {},
+      "writer_rule": "Always return the full lesson, including on retries. Do not return only a change summary."
+    },
+    {
+      "id": "sentence_length", "type": "code", "dimension": "beginner_friendly_language",
+      "question": "Does every sentence have 15 words or fewer?",
+      "params": {"max_words": 15},
+      "writer_rule": "Keep every sentence at 15 words or fewer. Write one idea in each sentence."
+    },
+    {
+      "id": "readability", "type": "code", "dimension": "beginner_friendly_language",
+      "question": "Is the Flesch Reading Ease score 60 or higher?",
+      "params": {"min_flesch": 60},
+      "writer_rule": "Use short, common words. Choose the simple word when two words mean the same."
+    },
+    {
+      "id": "no_idioms", "type": "code", "dimension": "beginner_friendly_language",
+      "question": "Is the lesson free of idioms, slang, and Latin short forms (e.g., i.e., etc.)?",
+      "params": {},
+      "writer_rule": "Do not use idioms, slang, or short forms like e.g., i.e., or etc. Say the plain words."
+    },
+    {
+      "id": "jargon_defined", "type": "code", "dimension": "clear_no_unexplained_jargon",
+      "question": "Is every technical term defined in the same sentence or the next sentence where it first appears?",
+      "params": {},
+      "writer_rule": "When you use a technical term for the first time, define it right there, in the same sentence or the next one."
+    },
+    {
+      "id": "no_unexplained_terms", "type": "llm", "dimension": "clear_no_unexplained_jargon",
+      "question": "Can the learner understand every technical word from the lesson alone?",
+      "params": {},
+      "writer_rule": "Do not use any technical word that the lesson does not explain in simple words before or where it is first used."
+    },
+    {
+      "id": "claims_grounded", "type": "llm", "dimension": "accurate_and_grounded",
+      "question": "Is every factual claim in the lesson supported by the fact sheet?",
+      "params": {},
+      "writer_rule": "Write only facts that are in the fact sheet. If the fact sheet does not say it, leave it out."
+    },
+    {
+      "id": "key_points_covered", "type": "llm", "dimension": "covers_the_key_points",
+      "question": "Does the lesson cover all key points?",
+      "params": {},
+      "writer_rule": "Cover every key point in the list. Check the list again before you finish."
+    },
+    {
+      "id": "lesson_length", "type": "code", "dimension": "covers_the_key_points",
+      "question": "Is the lesson between 400 and 900 words?",
+      "params": {"min_words": 400, "max_words": 900},
+      "writer_rule": "Keep the lesson between 400 and 900 words."
+    },
+    {
+      "id": "teaches_by_example", "type": "llm", "dimension": "teaches_by_example",
+      "question": "Does the lesson use an everyday analogy AND a worked example, and are both correct?",
+      "params": {},
+      "writer_rule": "Include one everyday analogy and one worked example that follows a real question through every step."
+    },
+    {
+      "id": "required_sections", "type": "code", "dimension": "coherent_teaching_flow",
+      "question": "Are the sections present and in this order: what, why, how, example, summary?",
+      "params": {"order": ["what is", "why", "how", "example", "summary|recap"]},
+      "writer_rule": "Use these section headings in this order: What is, Why, How, Example, Summary."
+    },
+    {
+      "id": "flow_coherent", "type": "llm", "dimension": "coherent_teaching_flow",
+      "question": "Does each idea build on the earlier ones, with no idea used before it is explained?",
+      "params": {},
+      "writer_rule": "Explain every idea before you use it. Each section must build on the one before."
+    }
+  ]
+}

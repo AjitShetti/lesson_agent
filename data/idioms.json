@@ -1,0 +1,15 @@
+{
+  "note": "Phrases that are hard for a learner with limited English. Matched as whole phrases, case-insensitive.",
+  "phrases": [
+    "piece of cake", "under the hood", "at the end of the day", "break the ice",
+    "hit the ground running", "in a nutshell", "a drop in the ocean", "game changer",
+    "game-changer", "think outside the box", "on the same page", "tip of the iceberg",
+    "rule of thumb", "ballpark", "out of the box", "behind the scenes", "bottom line",
+    "double-edged sword", "low-hanging fruit", "deep dive", "dive into", "bear in mind",
+    "boils down to", "state of the art", "needle in a haystack", "heavy lifting",
+    "cherry-pick", "a whole new ball game", "get the ball rolling", "back to square one",
+    "let the cat out of the bag", "the sky is the limit", "your mileage may vary",
+    "e.g.", "i.e.", "etc.", "vs.", "et al.", "a lot of ground", "kind of", "sort of",
+    "super easy", "no-brainer", "under the radar", "read between the lines"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "run_id": "20261107-112055-5a0c",
+  "topic": "Introduction to RAG",
+  "status": "pass",
+  "attempts": 2,
+  "shipped_attempt": 1,
+  "failed_checks_per_attempt": [
+    [
+      "sentence_length",
+      "no_idioms",
+      "claims_grounded"
+    ],
+    []
+  ]
+}

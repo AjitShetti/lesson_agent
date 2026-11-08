@@ -1,0 +1,10 @@
+ .env
+__pycache__/
+.pytest_cache/
+*.pyc
+memory/*.db
+outputs/*
+!outputs/.gitkeep
+.tmp-pip/
+.venv/
+*.db

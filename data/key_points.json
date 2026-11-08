@@ -1,0 +1,34 @@
+{
+  "key_points": [
+    {
+      "id": "kp_what",
+      "text": "What RAG is: a system finds relevant information first, then an LLM uses it to write the answer (Retrieval-Augmented Generation).",
+      "mock_keywords": ["stands for", "look up", "facts before"]
+    },
+    {
+      "id": "kp_why",
+      "text": "Why RAG is needed: LLM knowledge is old (training cutoff), LLMs can make up wrong answers (hallucination), and LLMs have not seen private data.",
+      "mock_keywords": ["hallucination", "private", "old"]
+    },
+    {
+      "id": "kp_how",
+      "text": "How RAG works: split documents into chunks, turn them into embeddings, store them in a vector database, retrieve the closest chunks for a question, put them in a prompt, and let the LLM answer.",
+      "mock_keywords": ["chunk", "embedding", "vector database", "prompt"]
+    },
+    {
+      "id": "kp_no_retrain",
+      "text": "RAG does not retrain or change the LLM. The LLM only reads the retrieved text in the prompt.",
+      "mock_keywords": ["does not train", "does not change"]
+    },
+    {
+      "id": "kp_example",
+      "text": "One worked example that follows a question through the RAG steps.",
+      "mock_keywords": ["## example"]
+    },
+    {
+      "id": "kp_limits",
+      "text": "Benefits and limits: easy to update, can show sources; but wrong retrieval gives wrong answers and RAG does not remove all mistakes.",
+      "mock_keywords": ["limits", "still make mistakes"]
+    }
+  ]
+}

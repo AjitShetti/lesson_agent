@@ -1,0 +1,17 @@
+{
+  "note": "Technical terms. Each term that appears in a lesson must be defined in the same sentence or the next sentence where it first appears.",
+  "terms": [
+    {"term": "RAG", "case_sensitive": true, "plain": "a way to let an AI look up facts before it answers"},
+    {"term": "LLM", "case_sensitive": true, "plain": "Large Language Model: a program that reads and writes text"},
+    {"term": "retrieval", "case_sensitive": false, "plain": "finding the most useful information"},
+    {"term": "embedding", "case_sensitive": false, "plain": "numbers that show the meaning of a text"},
+    {"term": "vector database", "case_sensitive": false, "plain": "a store that finds similar embeddings fast"},
+    {"term": "chunk", "case_sensitive": false, "plain": "a small piece of a document"},
+    {"term": "prompt", "case_sensitive": false, "plain": "the text sent to the LLM"},
+    {"term": "hallucination", "case_sensitive": false, "plain": "a wrong answer that sounds right"},
+    {"term": "fine-tuning", "case_sensitive": false, "plain": "training a model more on new data"},
+    {"term": "training cutoff", "case_sensitive": false, "plain": "the date when the model stopped learning"},
+    {"term": "indexing", "case_sensitive": false, "plain": "preparing documents so the system can find useful parts later"},
+    {"term": "weights", "case_sensitive": false, "plain": "the numbers inside a model that store what it learned"}
+  ]
+}
