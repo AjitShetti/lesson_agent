@@ -23,7 +23,7 @@ Part D is the verification evidence. Part E is the honest list of limits.
 | Stack: LangGraph / Python + API, any model | Met | Python + LangGraph; Groq writer, Gemini judge |
 | Deliverable: README with setup and run instructions | Met | `README.md` |
 | Deliverable: final lesson as a document | Needs you | `sample_run_real/final_lesson.md` is a verified passing lesson to paste into Google Docs/Notion. You may prefer your own run |
-| Deliverable: Loom video (15-20 min) | Needs you | `docs/VIDEO_SCRIPT.md` has the outline |
+| Deliverable: Loom video (15-20 min) | Needs you | `docs/LOOM_SCRIPT.md` has the full spoken script |
 
 ### A2. Findings from running the original code with real models
 
@@ -41,7 +41,7 @@ The offline tests (60) all passed, but the real pipeline had never completed a c
 | F6 | Quota detection stopped on any Gemini 429 containing "exceeded your current quota". That text is in **per-minute** limits too, which are worth waiting for. | Gemini error text | Only a daily limit (`per day`), `insufficient_quota` or an inactive billing account stops at once |
 | F7 | CLI printed `FAIL: draft_nonempty` when the real cause was a writer API error, and hid judge quota errors. | Real run with a bad provider name | CLI prints writer and judge errors |
 | F8 | `.env` hazards seen in the original file: `WRITER_MODEL=   # comment` was read as the model name `# exact model ID...`; the provider was `console.groq.com`; the Groq key was stored as `XAI_API_KEY`. | Real run: `Writer: groq/# exact model ID from your xAI console` | Inline comments are now ignored by the loader; the aliases and the legacy key fallback were removed (D14); `.env.example` is rewritten. **Your own `.env` still needs the fix described in the final message** |
-| F9 | `docs/VIDEO_SCRIPT.md` said "11 hard pass/fail checks"; the rubric has 12. | Count of `data/rubric.json` | Fixed |
+| F9 | The old video outline said "11 hard pass/fail checks"; the rubric has 12. | Count of `data/rubric.json` | Fixed; the outline was later replaced by `docs/LOOM_SCRIPT.md` |
 | F10 | A Groq outage (HTTP 503, "model over capacity") ended one run. | Live response | Not a code defect: retries with backoff ran, the failure was reported clearly. Re-run |
 | F11 | A model that never answers (`gemini-3.7-flash`) made my own test run stall for about 30 minutes: 6 attempts x 120-second timeouts. | Observed | A timeout is now retried once, then fails with a clear message (D14) |
 
@@ -174,6 +174,7 @@ Each entry: **choice**, **alternatives**, **why**, **trade-off**. Entries marked
 | Separate extract-claims and verify-claims calls, and four more separate judge prompts | Replaced by two prompts (D6) |
 | Old single-`quote` response shape for key points | Compatibility for a prompt version that no longer exists |
 | A second definition-detection regex inside the LLM judge | The judge now reuses the one in `code_checks` (`defined_nearby`) |
+| `sample_run_mock/` (output of fake models), `docs/VIDEO_SCRIPT.md` (outline duplicated by `docs/LOOM_SCRIPT.md`), and the empty `.gitkeep` files | Files with no purpose: the real sample replaces the mock one, and the code creates `memory/` and `outputs/` itself |
 | `REGISTRY` mixing code and LLM checks | Code checks have a table; LLM checks come from the two judge calls, and a rubric check that no call answers raises an error instead of silently passing |
 
 **Honest size note:** the source is about 1,420 lines (was about 1,520); tests about 625 lines (was about 705). The main gain is in **concepts to explain**: 6 judge calls became 2, 5 providers became 3 with one request path, and 3 special-case retry rules disappeared.

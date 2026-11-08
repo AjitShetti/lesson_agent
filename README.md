@@ -45,7 +45,7 @@ python -m lesson_agent run --provider mock --inject-error
 ```
 
 The `mock` provider uses fake models. It tests the **plumbing** (loop, retry, logs, memory).
-It does **not** test lesson quality. A sample mock run is in `sample_run_mock/`.
+It does **not** test lesson quality. A real (not mock) sample run is in `sample_run_real/`.
 
 ## Real run
 
@@ -133,9 +133,8 @@ lesson_agent/
   mock_llm.py         offline fake models (tests only)
 scripts/              judge_reliability.py, memory_experiment.py
 tests/                offline tests
-sample_run_mock/      example output from an offline run
+sample_run_real/      output of a real run: the passing lesson + rejection log
 DESIGN.md             every design choice and trade-off
-docs/VIDEO_SCRIPT.md  outline for the 15-20 minute Loom
 docs/LOOM_SCRIPT.md   the full spoken script for the Loom (what to say, start to finish)
 ```
 

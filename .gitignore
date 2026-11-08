@@ -2,9 +2,8 @@
 __pycache__/
 .pytest_cache/
 *.pyc
-memory/*.db
-outputs/*
-!outputs/.gitkeep
+memory/
+outputs/
 .tmp-pip/
 .venv/
 *.db
