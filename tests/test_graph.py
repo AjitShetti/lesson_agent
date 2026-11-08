@@ -110,3 +110,10 @@ def test_memory_rules_reach_the_writer(mock_settings, monkeypatch):
     seen.clear()
     graph.run("t", mock_settings, use_memory=False)
     assert seen["rules"] == []
+
+
+def test_retries_are_capped_at_two_whatever_is_requested(mock_settings):
+    from lesson_agent.config import Settings
+    assert Settings(max_retries=9).max_retries == 2 and Settings(max_retries=-1).max_retries == 0
+    s = replace(mock_settings, mock_writer_mode="always_bad", max_retries=9)
+    assert len(graph.run("t", s)["attempts"]) == 3  # 1 try + 2 retries, never more

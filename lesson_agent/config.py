@@ -14,6 +14,8 @@ try:  # optional: load .env if python-dotenv is installed
 except ImportError:  # pragma: no cover
     pass
 
+MAX_RETRIES_CAP = 2  # the brief allows at most 1-2 retries, so no setting can go above this
+
 # Model used when WRITER_MODEL / JUDGE_MODEL is not set.
 DEFAULT_MODELS = {
     "groq": "qwen/qwen3.8-27b",
@@ -45,6 +47,9 @@ class Settings:
     examples_dir: Path = field(default_factory=lambda: ROOT / "examples")
     output_dir: Path = field(default_factory=lambda: ROOT / "outputs")
     memory_db: Path = field(default_factory=lambda: ROOT / "memory" / "memory.db")
+
+    def __post_init__(self) -> None:
+        self.max_retries = max(0, min(self.max_retries, MAX_RETRIES_CAP))  # applies to .env, --max-retries and tests
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":

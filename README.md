@@ -17,7 +17,7 @@ flowchart LR
     F --> G[memory_update<br/>SQLite]
 ```
 
-Stop rule: 1 first try + at most 2 retries. If it still fails, the best non-empty attempt (fewest fails)
+Stop rule: 1 first try + at most 2 retries (the brief's limit; a higher `MAX_RETRIES` is lowered to 2). If it still fails, the best non-empty attempt (fewest fails)
 is saved with `NEEDS_HUMAN_REVIEW.md` and the failure reasons. The loop always ends.
 
 Why it is built this way: see [DESIGN.md](DESIGN.md). It lists every design choice and trade-off.
@@ -136,6 +136,7 @@ tests/                offline tests
 sample_run_mock/      example output from an offline run
 DESIGN.md             every design choice and trade-off
 docs/VIDEO_SCRIPT.md  outline for the 15-20 minute Loom
+docs/LOOM_SCRIPT.md   the full spoken script for the Loom (what to say, start to finish)
 ```
 
 ## Before you submit: things only you can do

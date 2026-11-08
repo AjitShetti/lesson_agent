@@ -125,7 +125,7 @@ Each entry: **choice**, **alternatives**, **why**, **trade-off**. Entries marked
 **Trade-off:** the writer is told how to satisfy a heuristic. That is acceptable: the goal is a clear definition next to the term, which is also what a learner needs.
 
 ### D11. Stop rule and provider errors
-**Choice:** at most 1 + 2 attempts. After that, ship the best non-empty attempt (fewest failed checks; ties go to the latest) with `status = needs_human_review` and `NEEDS_HUMAN_REVIEW.md`. An empty writer reply gets one immediate re-ask. A **provider error** (quota, bad key, outage) stops the loop at once instead of burning retries, because rewriting cannot fix it.
+**Choice:** at most 1 + 2 attempts. The brief allows 1-2 retries, so `Settings` lowers any larger `MAX_RETRIES` or `--max-retries` to 2 (added after the independent review). After that, ship the best non-empty attempt (fewest failed checks; ties go to the latest) with `status = needs_human_review` and `NEEDS_HUMAN_REVIEW.md`. An empty writer reply gets one immediate re-ask. A **provider error** (quota, bad key, outage) stops the loop at once instead of burning retries, because rewriting cannot fix it.
 **Trade-off:** a transient judge outage ends the run early; it can be re-run. This is better than sending three lessons to a broken judge.
 
 ### D12. The rejection log records the writer's claim and the truth
@@ -157,7 +157,7 @@ Each entry: **choice**, **alternatives**, **why**, **trade-off**. Entries marked
 **Why:** because it is short and plain, only the grounding check (and, in real runs, the flow check) can catch it. The test asserts that the check fails, quotes the line, and the retry removes it.
 
 ### D18. Testing
-**Choice:** 66 offline tests: each code check; each judge safe-guard (fake JSON, fake quotes, missing or invented sentence numbers, provider errors, one attempt = 2 calls); the loop (pass first try, pass on retry, always-bad, max-retries, best-attempt choice); the log content; memory window and health; request shape and retry rules.
+**Choice:** 67 offline tests: each code check; each judge safe-guard (fake JSON, fake quotes, missing or invented sentence numbers, provider errors, one attempt = 2 calls); the loop (pass first try, pass on retry, always-bad, max-retries, best-attempt choice); the log content; memory window and health; request shape and retry rules.
 **Plus** a real-model reliability script (`scripts/judge_reliability.py`) that runs a hand-made good lesson and bad lesson through the real judge and reports checks that give the wrong or an unstable answer.
 
 ---
@@ -188,9 +188,9 @@ All real-model runs used the Groq writer `qwen/qwen3.8-27b` and a Gemini judge.
 
 | Test | Result |
 |---|---|
-| Offline test suite | 66 passed |
+| Offline test suite | 67 passed |
 | Mock end-to-end with `--inject-error` | attempt 0 fails `sentence_length`, `no_idioms`, `claims_grounded`; attempt 1 passes |
-| **Real end-to-end with `--inject-error`** (`sample_run_real/`) | attempt 0 failed `sentence_length`, `claims_grounded` (quoted the injected line as `contradicted`), `lesson_length`, `flow_coherent`; attempt 1 failed `claims_grounded` (one sentence beyond the fact sheet); **attempt 2 passed all 12 checks**. Judge gave a verdict on every sentence (0 skipped) |
+| **Real end-to-end with `--inject-error`** (`sample_run_real/`; judge `gemini-3.5-flash`) | attempt 0 failed `sentence_length`, `claims_grounded` (quoted the injected line as `contradicted`), `lesson_length`, `flow_coherent`; attempt 1 failed `claims_grounded` (one sentence beyond the fact sheet); **attempt 2 passed all 12 checks**. Judge gave a verdict on every sentence (0 skipped) |
 | **Real end-to-end, plain `run`, final code** (judge `gemini-3.1-flash-lite`) | attempt 0 failed `sentence_length`, `jargon_defined`, `claims_grounded`, `key_points_covered`; attempt 1 failed `jargon_defined`; **attempt 2 passed all 12 checks** |
 | Real judge reliability (`judge_reliability.py`) | Good lesson passes 12/12 and bad lesson fails 12/12, 3 of 3 runs. Details below |
 
@@ -209,7 +209,7 @@ How I got there (this is the evidence that the evaluator is strict but fair, so 
 - Final run above: stable.
 - The bad lesson failed every check in every run on every judge I tried.
 
-**Caveats on this evidence:** the end-to-end real run used `gemini-3.5-flash`, the reliability run used `gemini-3.1-flash-lite`; the default `gemini-flash-latest` had no quota left when I tested (F2), so I could not run the final code against that exact model. Reliability was measured over 3 runs, which shows stability but is not a statistical proof.
+**Caveats on this evidence:** the error-injection run used `gemini-3.5-flash`, the plain run and the reliability run used `gemini-3.1-flash-lite`; the default `gemini-flash-latest` had no quota left when I tested (F2), so I could not run the final code against that exact model. Reliability was measured over 3 runs, which shows stability but is not a statistical proof.
 
 ---
 
@@ -218,7 +218,7 @@ How I got there (this is the evidence that the evaluator is strict but fair, so 
 **Limits I know about**
 1. The judge picks which sentences are facts; a skipped sentence is not checked (it is counted in the result).
 2. A strict LLM judge can flip on borderline sentences. The reliability script exists to find them; the fixture lesson needed several edits before it was stable (Part D).
-3. Both real runs I made passed, but both on the last allowed attempt (attempt 2). A different draw can end in `needs_human_review`; that is the designed fallback, not a crash. If you want more headroom, set `MAX_RETRIES` higher (the brief allows 1-2) or give the writer the numeric limits (D9). A different draw may end in `needs_human_review`; that is the designed fallback, not a crash.
+3. Both real runs I made passed, but both on the last allowed attempt (attempt 2). A different draw can end in `needs_human_review`; that is the designed fallback, not a crash. The brief caps retries at 1-2, so `MAX_RETRIES` must stay at 2 or below. The honest way to get more headroom is to give the writer the numeric limits (D9).
 4. Gemini's free tier (about 20 requests/day/model) limits how many real runs fit in a day. `scripts/memory_experiment.py` needs far more calls, so I did **not** run it with real models; it runs offline with the mock (where the mock writer ignores memory, so it shows no effect).
 5. The fact sheet is small and I did not verify it line by line against the paper. You must do this (README, "Before you submit").
 6. `jargon_defined` only checks that a definition sits next to the term, not that it is good.
