@@ -20,7 +20,22 @@ flowchart LR
 Stop rule: 1 first try + at most 2 retries. If it still fails, the best non-empty attempt (fewest fails)
 is saved with `NEEDS_HUMAN_REVIEW.md` and the failure reasons. The loop always ends.
 
-## Quick start (no API key needed, 1 minute)
+Why it is built this way: see [DESIGN.md](DESIGN.md). It lists every design choice and trade-off.
+
+## Mapping to the assessment
+
+| The brief asks for | Where it is |
+|---|---|
+| Input: a topic | `python -m lesson_agent run --topic "Introduction to RAG"` |
+| Generate a standalone beginner lesson (what, why, how) | `generator.py` + writer prompt in `prompts.py` |
+| Evaluate against hard pass/fail checks, no partial credit | `data/rubric.json`: 12 checks, a lesson ships only if all 12 pass |
+| The six dimensions (grounded, beginner language, examples, no jargon, key points, flow) | the `dimension` field of each check (table below) |
+| Regenerate on fail with the reasons, max 1-2 retries | `graph.py`: retry loop, `MAX_RETRIES=2` |
+| Output: passing lesson + rejection log | `outputs/<run_id>/final_lesson.md`, `rejection_log.md` |
+| Self-evolving + memory across runs | `memory.py` (SQLite): top failures become writer rules; `health` command checks the rubric |
+| Stack | Python + LangGraph |
+
+## Quick start (no API key needed)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
@@ -32,30 +47,27 @@ python -m lesson_agent run --provider mock --inject-error
 The `mock` provider uses fake models. It tests the **plumbing** (loop, retry, logs, memory).
 It does **not** test lesson quality. A sample mock run is in `sample_run_mock/`.
 
-## Real run (writes the real lesson)
+## Real run
 
 ```bash
-cp .env.example .env          # then fill in the keys and model IDs
+cp .env.example .env          # then add GROQ_API_KEY and GEMINI_API_KEY
 python -m lesson_agent run --topic "Introduction to RAG"
 ```
 
-### Models and keys (free-friendly setup)
-
-| Role | Provider value | Key variable | Model variable |
+| Role | Provider | Key variable | Default model |
 |---|---|---|---|
-| Writer | `groq` (Groq) | `GROQ_API_KEY` | `qwen/qwen3.8-27b` by default |
-| Judge | `gemini` (Google AI Studio) | `GEMINI_API_KEY` | `gemini-2.5-flash` by default |
+| Writer | `groq` | `GROQ_API_KEY` | `qwen/qwen3.8-27b` |
+| Judge | `gemini` | `GEMINI_API_KEY` | `gemini-flash-latest` |
 
-Also supported: `xai` (`XAI_API_KEY`), `openai` (`OPENAI_API_KEY`), and `anthropic` (`ANTHROPIC_API_KEY`).
-Set `WRITER_MODEL` or `JUDGE_MODEL` to override the defaults. Groq also accepts the legacy `XAI_API_KEY` variable if `GROQ_API_KEY` is unset.
-Use two different vendors for writer and judge, so the judge does not repeat the writer's mistakes.
+`openai` also works for either role (`OPENAI_API_KEY`). Set `WRITER_MODEL` or `JUDGE_MODEL` to change a model.
+Use two different vendors, so the judge does not repeat the writer's mistakes.
 
-The code handles these API problems for you:
-- Separate key and URL per provider, so Grok and Gemini work in the same run.
-- `429` rate limits and `5xx`: retries with backoff and honors `Retry-After`; quota-exhausted `429` errors stop immediately.
-- `CALL_INTERVAL_SECONDS` (default 4): pause between calls to one provider. Increase it for stricter token-per-minute limits.
-- `400` error about `response_format` or `temperature`: retries once without those settings.
-- Missing key or model: stops with a clear message.
+**Free-tier limit:** Gemini's free tier allows about **20 requests per day for each model name**.
+One attempt uses 2 judge calls, so a full run uses at most 6. If you see `Out of quota`,
+set `JUDGE_MODEL` to another Gemini model (each has its own daily limit) or wait.
+
+The code retries `429` and `5xx` errors with waits (and honors `Retry-After`).
+A daily-quota `429` stops at once. `CALL_INTERVAL_SECONDS` (default 4) spaces out calls to one provider.
 
 Output goes to `outputs/<run_id>/`:
 
@@ -73,9 +85,9 @@ Output goes to `outputs/<run_id>/`:
 ```bash
 python -m lesson_agent run                      # 1. full loop, end to end
 python -m lesson_agent run --inject-error       # 2. evaluator catches a deliberate false sentence
-python scripts/judge_reliability.py --runs 3    # 3. evaluator is stable: good lesson passes, bad lesson fails
-python scripts/memory_experiment.py --runs 5    # 4. does memory help? (first-attempt pass rate, OFF vs ON)
-python -m lesson_agent health                   # 5. memory + rubric health (always/never-failing checks)
+python scripts/judge_reliability.py --runs 1    # 3. evaluator test: good lesson passes, bad lesson fails
+python -m lesson_agent health                   # 4. memory + rubric health (always/never-failing checks)
+python scripts/memory_experiment.py --runs 5    # 5. does memory help? (needs many calls: use a paid or mock judge)
 ```
 
 `--inject-error` adds this false line to the "How" section of the first draft:
@@ -99,6 +111,7 @@ The grounding check must fail it, quote it, and the retry must remove it.
 | 11 | `required_sections` in order | code | teaching flow |
 | 12 | `flow_coherent` | LLM | teaching flow |
 
+The 5 LLM checks use only **2 judge calls** per attempt: call 1 answers #7, call 2 answers #6, #8, #10, #12.
 A lesson ships only if **all 12** pass. Edit `data/rubric.json`, `data/jargon.json`,
 `data/idioms.json`, and `data/key_points.json` to change the rules. No code change needed.
 
@@ -112,15 +125,16 @@ lesson_agent/
   generator.py        writer + error injection
   rubric.py           loads rubric, runs all checks
   checks/code_checks.py   measurable checks (Python only)
-  checks/llm_judge.py     meaning checks (LLM) + safe-guards
+  checks/llm_judge.py     meaning checks (2 LLM calls) + safe-guards
   prompts.py          every prompt
   memory.py           SQLite memory + rubric health
   logging_utils.py    rejection log + outputs
-  llm.py              Anthropic / OpenAI-compatible / mock
+  llm.py              one HTTP call function for Groq / Gemini / OpenAI
+  mock_llm.py         offline fake models (tests only)
 scripts/              judge_reliability.py, memory_experiment.py
-tests/                60 offline tests
+tests/                offline tests
 sample_run_mock/      example output from an offline run
-DESIGN.md             why it is built this way
+DESIGN.md             every design choice and trade-off
 docs/VIDEO_SCRIPT.md  outline for the 15-20 minute Loom
 ```
 
@@ -136,6 +150,6 @@ docs/VIDEO_SCRIPT.md  outline for the 15-20 minute Loom
 
 - `jargon_defined` checks that a definition sits next to the term. It does not judge if the definition is good. The LLM check covers meaning.
 - Syllable counting is a simple rule, so Flesch scores are approximate.
-- Fact sheet is small. A true claim that is not in the sheet counts as a fail. This is strict on purpose.
+- The fact sheet is small. A true claim that is not in the sheet counts as a fail. This is strict on purpose.
+- The judge lists the claims itself. If it skips a sentence, that sentence is not checked.
 - Memory can show a fair effect only after several runs. Small samples are noisy.
-- Empty writer replies are requested once more. Claim checks are batched and can retry missing verdicts, so judge call counts vary by lesson.

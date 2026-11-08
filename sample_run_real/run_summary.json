@@ -1,0 +1,19 @@
+{
+  "run_id": "20261108-132741-7f21",
+  "topic": "Introduction to RAG",
+  "status": "pass",
+  "attempts": 3,
+  "shipped_attempt": 2,
+  "failed_checks_per_attempt": [
+    [
+      "sentence_length",
+      "claims_grounded",
+      "lesson_length",
+      "flow_coherent"
+    ],
+    [
+      "claims_grounded"
+    ],
+    []
+  ]
+}

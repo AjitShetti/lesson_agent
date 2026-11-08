@@ -1,11 +1,17 @@
-"""Checks that need MEANING are done by an LLM judge. Safe-guards:
+"""Checks that need MEANING are done by an LLM judge, in just TWO calls per attempt:
 
-1. Different model + different prompt from the writer, temperature 0, JSON only.
-2. Claims are listed FIRST, then each is checked against the fact sheet (no "is it accurate?" in one shot).
-3. "Supported" needs a word-for-word quote from the fact sheet. If the quote is not in the sheet, the claim counts as unsupported.
-4. Every complaint needs a word-for-word quote from the lesson. A complaint we cannot find in the lesson is dropped
-   (it is judge noise). We then fail only on evidence we can verify.
-5. If the judge returns broken JSON twice, the check FAILS (fail closed). It never passes by accident.
+  call 1 "ground"  -> claims_grounded
+  call 2 "review"  -> key_points_covered, teaches_by_example, flow_coherent, no_unexplained_terms
+
+Two calls keep us inside free-tier daily limits (a full 3-attempt run needs about 6 judge calls).
+
+Safe-guards (the judge is only trusted when its evidence can be checked by plain code):
+1. Different vendor + prompt from the writer, temperature 0, JSON only.
+2. The judge gives a verdict for every numbered sentence, one by one. Not one big "is it accurate?".
+3. "Supported" needs a word-for-word quote from the fact sheet. If the quote is not in the sheet, the claim fails.
+4. Verdicts must point at a real sentence number, and every complaint needs a word-for-word quote from the lesson.
+   One we cannot find is dropped (judge noise). We fail only on evidence we can verify.
+5. If the judge returns broken JSON twice, the checks FAIL (fail closed). They never pass by accident.
 """
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ import re
 
 from .. import llm, prompts
 from .. import text_utils as T
+from . import code_checks
 
 
 class JudgeError(RuntimeError):
@@ -23,7 +30,16 @@ def _res(passed: bool, reason: str = "OK", evidence: str = "", **extra) -> dict:
     return {"passed": passed, "reason": reason, "evidence": evidence, **extra}
 
 
+def _list(x) -> list:
+    return x if isinstance(x, list) else []
+
+
+def _dict(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
 def _call_json(ctx, task: str, user: str) -> dict:
+    """Ask the judge for JSON. One more try if the reply is not valid JSON, then give up."""
     system = prompts.JUDGE_SYSTEM.format(learner=ctx.rubric["learner"])
     last_err = None
     for attempt in range(2):
@@ -39,70 +55,51 @@ def _call_json(ctx, task: str, user: str) -> dict:
     raise JudgeError(f"judge returned invalid JSON for '{task}': {last_err}")
 
 
-# ---------------------------------------------------------------- accurate & grounded
-def claims_grounded(lesson: str, ctx, params: dict) -> dict:
-    claims = _call_json(ctx, "extract_claims", prompts.extract_claims(lesson)).get("claims", [])
-    if not isinstance(claims, list):
-        claims = []
-    claims = [dict(c) for c in claims if isinstance(c, dict)]
-    for index, claim in enumerate(claims, 1):
-        claim.setdefault("id", f"c{index}")
-    dropped = [c for c in claims if not T.quote_in(c.get("quote", ""), lesson)]
-    claims = [c for c in claims if c not in dropped]
-    facts = [c for c in claims if c.get("type") == "fact"]
+# ================================================================ call 1: accurate & grounded
+def judge_grounding(lesson: str, ctx) -> dict[str, dict]:
+    sents = T.sentences(lesson)
+    data = _call_json(ctx, "ground", prompts.ground(sents, ctx.fact_sheet))
+    verdicts = {}
+    for v in _list(data.get("verdicts")):
+        n = v.get("n") if isinstance(v, dict) else None
+        if isinstance(n, int) and 1 <= n <= len(sents):  # safe-guard 4: only real sentence numbers count
+            verdicts[n] = v
+    facts = {n: v for n, v in verdicts.items() if v.get("verdict") != "not_a_fact"}
     if not facts:
-        return _res(False, "The judge found no factual claims, so nothing could be checked. Treated as a fail.")
-    batch_size = max(1, int(params.get("batch_size", 8)))
-    by_id = {}
-    for start in range(0, len(facts), batch_size):
-        batch = facts[start : start + batch_size]
-        data = _call_json(ctx, "verify_claims", prompts.verify_claims(ctx.fact_sheet, batch))
-        batch_verdicts = data.get("verdicts", [])
-        if not isinstance(batch_verdicts, list):
-            batch_verdicts = []
-        by_id.update({v.get("id"): v for v in batch_verdicts if isinstance(v, dict) and v.get("id")})
-
-        # Large responses can omit IDs. Retry only the missing claims in a smaller request.
-        missing = [c for c in batch if c["id"] not in by_id]
-        if missing:
-            retry = _call_json(ctx, "verify_claims", prompts.verify_claims(ctx.fact_sheet, missing))
-            retry_verdicts = retry.get("verdicts", [])
-            if isinstance(retry_verdicts, list):
-                by_id.update({v.get("id"): v for v in retry_verdicts if isinstance(v, dict) and v.get("id")})
+        return {"claims_grounded": _res(False, "The judge found no factual claims, so nothing could be checked. Treated as a fail.")}
     bad = []
-    for c in facts:
-        v = by_id.get(c["id"])
-        if v is None:
-            bad.append((c["quote"], "no verdict from the judge after a targeted retry"))
-        elif v.get("verdict") != "supported":
-            bad.append((c["quote"], f"{v.get('verdict')}: {v.get('reason', '')}".strip()))
-        elif not T.quote_in(v.get("sheet_quote", ""), ctx.fact_sheet):
-            bad.append((c["quote"], "judge said supported but its quote is not in the fact sheet"))
+    for n, v in sorted(facts.items()):
+        if v.get("verdict") != "supported":
+            bad.append((sents[n - 1], f"{v.get('verdict')}: {v.get('reason', '')}".strip()))
+        elif not T.quote_in(v.get("sheet_quote", ""), ctx.fact_sheet):  # safe-guard 3
+            bad.append((sents[n - 1], "judge said supported but its quote is not in the fact sheet"))
+    stats = {"claims_checked": len(facts), "sentences_without_verdict": len(sents) - len(verdicts)}
     if not bad:
-        return _res(True, f"All {len(facts)} factual claims are supported by the fact sheet.",
-                    claims_checked=len(facts), dropped_claims=len(dropped))
+        return {"claims_grounded": _res(True, f"All {len(facts)} factual claims are supported by the fact sheet.", **stats)}
     listed = " | ".join(f'"{T.shorten(q, 110)}" → {why}' for q, why in bad[:4])
-    return _res(False, f"{len(bad)} of {len(facts)} factual claims are not supported by the fact sheet: {listed}",
-                evidence=bad[0][0], verified=True, claims_checked=len(facts), dropped_claims=len(dropped))
+    return {"claims_grounded": _res(
+        False, f"{len(bad)} of {len(facts)} factual claims are not supported by the fact sheet: {listed}",
+        evidence=bad[0][0], verified=True, **stats)}
 
 
-# ---------------------------------------------------------------- key points
-def key_points_covered(lesson: str, ctx, params: dict) -> dict:
-    data = _call_json(ctx, "coverage", prompts.coverage(lesson, ctx.key_points))
-    points = data.get("points", [])
-    if not isinstance(points, list):
-        points = []
-    got = {p.get("id"): p for p in points if isinstance(p, dict) and p.get("id")}
+# ================================================================ call 2: the four teaching checks
+def judge_review(lesson: str, ctx) -> dict[str, dict]:
+    data = _call_json(ctx, "review", prompts.review(lesson, ctx.key_points))
+    return {
+        "key_points_covered": _key_points(data, lesson, ctx),
+        "teaches_by_example": _example(data, lesson),
+        "flow_coherent": _flow(data, lesson),
+        "no_unexplained_terms": _unexplained_terms(data, lesson),
+    }
+
+
+def _key_points(data: dict, lesson: str, ctx) -> dict:
+    got = {p.get("id"): p for p in _list(data.get("key_points")) if isinstance(p, dict)}
     missing = []
     for k in ctx.key_points:
-        p = got.get(k["id"])
-        quotes = p.get("quotes", []) if isinstance(p, dict) else []
-        if not isinstance(quotes, list):
-            quotes = []
-        if not quotes and isinstance(p, dict) and isinstance(p.get("quote"), str):
-            quotes = [p["quote"]]  # accept the old single-quote response shape
-        evidence_ok = bool(quotes) and all(T.quote_in(q, lesson) for q in quotes)
-        if not p or not p.get("covered") or not evidence_ok:
+        p = got.get(k["id"], {})
+        quotes = _list(p.get("quotes"))
+        if not (p.get("covered") and quotes and all(T.quote_in(q, lesson) for q in quotes)):
             missing.append(k)
     if not missing:
         return _res(True, f"All {len(ctx.key_points)} key points are covered.")
@@ -111,47 +108,39 @@ def key_points_covered(lesson: str, ctx, params: dict) -> dict:
                 evidence=names, missing=[k["id"] for k in missing])
 
 
-# ---------------------------------------------------------------- example
-def teaches_by_example(lesson: str, ctx, params: dict) -> dict:
-    d = _call_json(ctx, "teaches_by_example", prompts.teaches_by_example(lesson))
+def _example(data: dict, lesson: str) -> dict:
+    d = _dict(data.get("example"))
     problems = []
     for key, label in (("has_everyday_analogy", "no everyday analogy"), ("has_worked_example", "no worked example")):
-        part = d.get(key, {})
-        if not isinstance(part, dict) or not part.get("ok") or not T.quote_in(part.get("quote", ""), lesson):
+        part = _dict(d.get(key))
+        if not part.get("ok") or not T.quote_in(part.get("quote", ""), lesson):
             problems.append(label)
-    ok_correct = d.get("example_is_correct", {})
-    if not isinstance(ok_correct, dict) or not ok_correct.get("ok"):
-        reason = ok_correct.get("reason", "") if isinstance(ok_correct, dict) else "invalid judge response"
-        problems.append("example does not match how the topic works: " + str(reason))
+    correct = _dict(d.get("example_is_correct"))
+    if not correct.get("ok"):
+        problems.append("example does not match how the topic works: " + str(correct.get("reason", "invalid judge response")))
     if not problems:
         return _res(True, "The lesson has an everyday analogy and a correct worked example.")
     return _res(False, "; ".join(problems))
 
 
-# ---------------------------------------------------------------- flow
-def flow_coherent(lesson: str, ctx, params: dict) -> dict:
-    d = _call_json(ctx, "flow", prompts.flow(lesson))
+def _flow(data: dict, lesson: str) -> dict:
+    d = _dict(data.get("flow"))
     if d.get("ok", False):
         return _res(True, "The ideas build on each other in a clear order.")
-    q = d.get("problem_quote", "")
-    if q and not T.quote_in(q, lesson):  # complaint we cannot verify: judge noise
+    quote = d.get("problem_quote", "")
+    if quote and not T.quote_in(quote, lesson):  # complaint we cannot verify: judge noise
         return _res(True, "Judge complaint dropped: its quote is not in the lesson.", dropped=True)
-    return _res(False, d.get("reason", "The flow is not clear."), evidence=q, verified=bool(q))
+    return _res(False, d.get("reason") or "The flow is not clear.", evidence=quote, verified=bool(quote))
 
 
-# ---------------------------------------------------------------- unexplained terms
-def no_unexplained_terms(lesson: str, ctx, params: dict) -> dict:
-    d = _call_json(ctx, "unexplained_terms", prompts.unexplained_terms(lesson))
-    terms = d.get("terms", [])
-    if not isinstance(terms, list):
-        terms = []
-    real = [
-        t for t in terms
-        if isinstance(t, dict)
-        and isinstance(t.get("term"), str)
-        and T.quote_in(t.get("quote", ""), lesson)
-        and not _has_local_definition(lesson, t.get("term", ""), t.get("quote", ""))
-    ]
+def _unexplained_terms(data: dict, lesson: str) -> dict:
+    sents = T.sentences(lesson)
+    real = []
+    for t in _list(data.get("unexplained_terms")):
+        t = _dict(t)
+        term, quote = t.get("term"), t.get("quote", "")
+        if isinstance(term, str) and T.quote_in(quote, lesson) and not _defined_at_first_use(sents, term, quote):
+            real.append(t)
     if not real:
         return _res(True, "The judge found no unexplained technical terms.")
     names = ", ".join(f'"{t["term"]}"' for t in real[:6])
@@ -159,34 +148,21 @@ def no_unexplained_terms(lesson: str, ctx, params: dict) -> dict:
                 evidence=real[0]["quote"], verified=True, terms=[t["term"] for t in real])
 
 
-_DEFINITION_CUE = r"(?:is|are|means|mean|stands for|refers to|is called)\b"
+def _defined_at_first_use(sents: list[str], term: str, quote: str) -> bool:
+    """Drop a judge complaint when the plain code rule sees a definition next to the term.
+
+    "large language model (LLM)" is tried as the full text, the part without brackets, and the part inside them.
+    """
+    names = {term, re.sub(r"\s*\([^)]*\)", "", term).strip(), *re.findall(r"\(([^)]+)\)", term)}
+    regexes = [code_checks.term_regex(n.strip()) for n in names if n.strip()]
+    i = next((n for n, s in enumerate(sents) if T.quote_in(quote, s)), None)  # sentence the judge quoted
+    if i is None:  # quote spans several sentences: use the first sentence that mentions the term
+        i = next((n for n, s in enumerate(sents) if any(rx.search(s) for rx in regexes)), None)
+    return i is not None and any(code_checks.defined_nearby(sents, i, rx) for rx in regexes)
 
 
-def _has_local_definition(lesson: str, term: str, first_quote: str) -> bool:
-    """Filter judge complaints when a term is plainly defined at first use or next sentence."""
-    if not term:
-        return False
-    sentences = T.sentences(lesson)
-    idx = next((i for i, sentence in enumerate(sentences) if T.quote_in(first_quote, sentence)), None)
-    variants = [term]
-    variants.extend(re.findall(r"\(([^)]+)\)", term))
-    base = re.sub(r"\s*\([^)]*\)", "", term).strip()
-    if base and base not in variants:
-        variants.append(base)
-    if idx is None:
-        idx = next((i for i, sentence in enumerate(sentences)
-                    if any(re.search(rf"(?<!\w){re.escape(v.strip())}(?!\w)", sentence, re.I)
-                           for v in variants if v.strip())), None)
-    if idx is None:
-        return False
-
-    nearby = " ".join(sentences[idx : idx + 2])
-    for variant in variants:
-        escaped = re.escape(variant.strip())
-        if not escaped:
-            continue
-        if re.search(rf"(?<!\w){escaped}(?!\w)\s+{_DEFINITION_CUE}", nearby, re.I):
-            return True
-        if re.search(rf"\b(?:called|known as|named)\s+(?:an?\s+|the\s+)?{escaped}(?!\w)", nearby, re.I):
-            return True
-    return False
+# The two judge calls, with the checks each one answers. rubric.evaluate runs them in this order.
+CALLS = [
+    (["claims_grounded"], judge_grounding),
+    (["key_points_covered", "teaches_by_example", "flow_coherent", "no_unexplained_terms"], judge_review),
+]

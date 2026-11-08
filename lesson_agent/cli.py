@@ -35,6 +35,12 @@ def cmd_run(a) -> None:
         tag = "PASS" if not bad else "FAIL: " + ", ".join(bad)
         extra = f"   (injected error: \"{at['injected_error']}\")" if at.get("injected_error") else ""
         print(f"  attempt {i}: {tag}{extra}")
+        if at.get("generation_error"):
+            print(f"             writer error: {at['generation_error']}")
+        for r in at["results"]:
+            if r.get("execution_error"):
+                print(f"             judge error: {' '.join(r['reason'].split())[:160]}")
+                break
     print()
     print(f"Status: {out['status'].upper()}   shipped attempt: {out['best_attempt']}")
     print(f"Output folder: {out['run_dir']}")

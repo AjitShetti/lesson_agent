@@ -2,21 +2,21 @@
 
 ## What is RAG?
 
-RAG stands for Retrieval-Augmented Generation. Retrieval means finding information. Augmented means made stronger. Generation means writing an answer. In simple words, RAG lets an AI look up facts before it answers.
+RAG stands for Retrieval-Augmented Generation. Retrieval means finding information. Generation means writing an answer. In simple words, RAG lets an AI look up facts before it answers.
 
 Think of an exam where you can read your book. RAG gives the AI an open book.
 
-An LLM is a Large Language Model. It is a computer program that reads and writes text. ChatGPT and Claude are examples of LLMs.
+An LLM is a computer program. It is trained on a very large amount of text to read and write language.
 
 ## Why do we need RAG?
 
-An LLM learns from a large pile of text. This learning stops on a fixed date. After that date, the LLM knows nothing new.
+An LLM learns from text collected up to a fixed date. This date is called the training cutoff. The LLM does not know facts after that date.
 
-This is the first problem. The LLM may give old answers. For example, it may not know last week's news.
+This is the first problem. The LLM may give old answers. It does not know new events or facts.
 
-The second problem is hallucination. A hallucination is when the AI gives a wrong answer that sounds right. The AI does not lie on purpose. It simply guesses a bad answer.
+The second problem is hallucination. A hallucination is when the AI gives a wrong answer that sounds right.
 
-The third problem is private data. An LLM has never seen your school notes or your company files. It cannot answer questions about them.
+The third problem is private data. An LLM has not seen private files unless they were in its training data.
 
 RAG helps with all three problems. It gives the AI the right facts at the right time.
 
@@ -27,7 +27,7 @@ RAG works in two parts. First, the system prepares the facts. Then, the system a
 Part 1: Prepare the facts. This is done before any question comes.
 
 1. Collect your documents. Examples are books, web pages, or company files.
-2. Split each document into small pieces. Each piece is called a chunk. A chunk may be a few sentences long.
+2. Split each document into small pieces. Each piece is called a chunk.
 3. Turn each chunk into numbers. These numbers are called an embedding. An embedding shows the meaning of the text. Chunks with similar meaning get similar numbers.
 4. Save all embeddings in a vector database. A vector database is a special store. It can find similar meanings very fast.
 

@@ -27,15 +27,7 @@ def _tag(user: str, name: str) -> str:
 def respond(settings, role: str, task: str, system: str, user: str) -> str:
     if role == "writer":
         return _writer(settings, user)
-    handler = {
-        "extract_claims": _extract_claims,
-        "verify_claims": _verify_claims,
-        "coverage": _coverage,
-        "teaches_by_example": _example,
-        "flow": _flow,
-        "unexplained_terms": lambda s, u: json.dumps({"terms": []}),
-    }[task]
-    return handler(settings, user)
+    return {"ground": _ground, "review": _review}[task](settings, user)
 
 
 # ------------------------------------------------------------------ writer
@@ -61,17 +53,6 @@ def _writer(settings, user: str) -> str:
 
 
 # ------------------------------------------------------------------ judge
-def _extract_claims(settings, user: str) -> str:
-    lesson = _tag(user, "lesson")
-    claims = []
-    for i, s in enumerate(T.sentences(lesson), 1):
-        if T.count_words(s) < 6:
-            continue
-        kind = "analogy" if s.startswith("Think of") else "example" if ("Meena" in s or '"' in s or "helpbot" in s.lower()) else "fact"
-        claims.append({"id": f"c{i}", "quote": s, "type": kind})
-    return json.dumps({"claims": claims})
-
-
 def _best_sheet_line(sentence: str, sheet: str) -> str:
     sw = set(re.findall(r"[a-z]{4,}", sentence.lower()))
     best, score = "", -1
@@ -85,48 +66,47 @@ def _best_sheet_line(sentence: str, sheet: str) -> str:
     return best
 
 
-def _verify_claims(settings, user: str) -> str:
+def _ground(settings, user: str) -> str:
+    """Judge call 1. Known-false patterns are 'contradicted'; analogy and story sentences are not facts."""
     sheet = _tag(user, "fact_sheet")
-    claims = json.loads(_tag(user, "claims"))
     verdicts = []
-    for c in claims:
-        q = c["quote"]
-        false_hit = any(re.search(p, q, re.I) for p in _FALSE_PATTERNS) and not _NEGATION.search(q)
-        if false_hit:
-            verdicts.append({"id": c["id"], "verdict": "contradicted", "sheet_quote": "",
+    for line in _tag(user, "lesson_sentences").splitlines():
+        m = re.match(r"\[(\d+)\] (.*)", line)
+        if not m:
+            continue
+        n, s = int(m.group(1)), m.group(2)
+        if T.count_words(s) < 6 or s.startswith("Think of") or "Meena" in s or '"' in s or "helpbot" in s.lower():
+            verdicts.append({"n": n, "verdict": "not_a_fact"})
+        elif any(re.search(p, s, re.I) for p in _FALSE_PATTERNS) and not _NEGATION.search(s):
+            verdicts.append({"n": n, "verdict": "contradicted",
                              "reason": "The fact sheet says RAG does not retrain the LLM and does not remove all mistakes."})
         else:
-            verdicts.append({"id": c["id"], "verdict": "supported", "sheet_quote": _best_sheet_line(q, sheet), "reason": "(mock)"})
+            verdicts.append({"n": n, "verdict": "supported", "sheet_quote": _best_sheet_line(s, sheet)})
     return json.dumps({"verdicts": verdicts})
 
 
-def _coverage(settings, user: str) -> str:
+def _review(settings, user: str) -> str:
+    """Judge call 2. Key points by keyword match; the example needs 'Think of ...' and 'Meena'."""
     lesson = _tag(user, "lesson")
     low = lesson.lower()
-    kps = json.loads(_tag(user, "key_points"))
-    kw = {k["id"]: k.get("mock_keywords", []) for k in json.loads(
+    sents = T.sentences(lesson)
+    keywords = {k["id"]: k.get("mock_keywords", []) for k in json.loads(
         (Path(settings.data_dir) / "key_points.json").read_text(encoding="utf-8"))["key_points"]}
-    sents = T.sentences(lesson)
-    out = []
-    for k in kps:
-        hit = [w for w in kw.get(k["id"], []) if w in low]
-        ok = len(hit) >= max(1, len(kw.get(k["id"], [])) // 2)
+    points = []
+    for k in json.loads(_tag(user, "key_points")):
+        kw = keywords.get(k["id"], [])
+        hit = [w for w in kw if w in low]
         quote = next((s for s in sents if hit and hit[0] in s.lower()), sents[0] if sents else "")
-        out.append({"id": k["id"], "covered": ok, "quote": quote, "reason": "(mock keyword match)"})
-    return json.dumps({"points": out})
-
-
-def _example(settings, user: str) -> str:
-    lesson = _tag(user, "lesson")
-    sents = T.sentences(lesson)
+        points.append({"id": k["id"], "covered": len(hit) >= max(1, len(kw) // 2), "quotes": [quote]})
     analogy = next((s for s in sents if s.startswith("Think of")), "")
     start = next((s for s in sents if "Meena" in s), "")
     return json.dumps({
-        "has_everyday_analogy": {"ok": bool(analogy), "quote": analogy},
-        "has_worked_example": {"ok": bool(start), "quote": start},
-        "example_is_correct": {"ok": bool(analogy and start), "reason": "(mock)"},
+        "key_points": points,
+        "example": {
+            "has_everyday_analogy": {"ok": bool(analogy), "quote": analogy},
+            "has_worked_example": {"ok": bool(start), "quote": start},
+            "example_is_correct": {"ok": bool(analogy and start), "reason": "(mock)"},
+        },
+        "flow": {"ok": True, "problem_quote": "", "reason": ""},
+        "unexplained_terms": [],
     })
-
-
-def _flow(settings, user: str) -> str:
-    return json.dumps({"ok": True, "problem_quote": "", "reason": ""})

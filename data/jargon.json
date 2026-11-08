@@ -2,7 +2,7 @@
   "note": "Technical terms. Each term that appears in a lesson must be defined in the same sentence or the next sentence where it first appears.",
   "terms": [
     {"term": "RAG", "case_sensitive": true, "plain": "a way to let an AI look up facts before it answers"},
-    {"term": "LLM", "case_sensitive": true, "plain": "Large Language Model: a program that reads and writes text"},
+    {"term": "LLM", "case_sensitive": true, "plain": "a Large Language Model, a program that reads and writes text"},
     {"term": "retrieval", "case_sensitive": false, "plain": "finding the most useful information"},
     {"term": "embedding", "case_sensitive": false, "plain": "numbers that show the meaning of a text"},
     {"term": "vector database", "case_sensitive": false, "plain": "a store that finds similar embeddings fast"},

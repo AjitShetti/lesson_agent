@@ -1,15 +1,12 @@
 """One function for every model call: complete(...).
 
-Providers
-  anthropic  Claude (own API format)
-  openai     OpenAI            key: OPENAI_API_KEY   url: OPENAI_BASE_URL (optional)
-  groq       Groq              key: GROQ_API_KEY     url: GROQ_BASE_URL (optional)
-  xai        Grok (xAI)        key: XAI_API_KEY      url: XAI_BASE_URL (optional)
-  gemini     Google Gemini     key: GEMINI_API_KEY   url: GEMINI_BASE_URL (optional)
-  mock       offline fake models for tests
+Providers (all use the same OpenAI-style "chat/completions" request, so there is one code path):
+  groq    key: GROQ_API_KEY
+  gemini  key: GEMINI_API_KEY
+  openai  key: OPENAI_API_KEY
+  mock    offline fake models for tests
 
-openai, groq, xai and gemini all use the OpenAI-style "chat/completions" request, so they share one code path.
-No SDK is needed. We call the HTTP APIs with `requests`.
+No SDK is needed. We call the HTTP API with `requests`.
 """
 from __future__ import annotations
 
@@ -24,19 +21,18 @@ from .config import Settings
 
 
 class LLMError(RuntimeError):
-    def __init__(self, message: str, status: int | None = None):
-        super().__init__(message)
-        self.status = status
+    pass
 
 
-# provider -> (key env var, default base URL, base-URL env var)
-COMPAT = {
-    "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1", "OPENAI_BASE_URL"),
-    "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1", "GROQ_BASE_URL"),
-    "xai": ("XAI_API_KEY", "https://api.x.ai/v1", "XAI_BASE_URL"),
-    "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_BASE_URL"),
+# provider -> (key variable, base URL)
+PROVIDERS = {
+    "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1"),
+    "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai"),
+    "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
 }
-RETRY_DELAYS = [2, 5, 15, 30, 60]  # seconds; free tiers need long waits after a 429
+RETRY_DELAYS = [2, 5, 15, 30, 60]  # seconds to wait before each retry of a 429 / 5xx / network error
+# A 429 with one of these texts means the quota is used up. Waiting will not help, so we stop at once.
+OUT_OF_QUOTA = ("per day", "insufficient_quota", "billing account is not active")
 _last_call: dict[str, float] = {}
 
 
@@ -51,15 +47,31 @@ def complete(settings: Settings, role: str, task: str, system: str, user: str, j
         from . import mock_llm
 
         return mock_llm.respond(settings, role, task, system, user)
+    if provider not in PROVIDERS:
+        raise LLMError(f"Unknown provider: {provider}. Use groq, gemini, openai or mock.")
+    key_var, base_url = PROVIDERS[provider]
+    key = os.getenv(key_var)
+    if not key:
+        raise LLMError(f"{key_var} is not set.")
     if not model:
         raise LLMError(f"{role.upper()}_MODEL is not set. Put the model ID in your .env file.")
-    max_tokens = 4096 if role == "writer" else 1600
+
+    body = {
+        "model": model,
+        "temperature": temp,
+        "max_tokens": 4096 if role == "writer" else 16384,  # the judge budget includes the model's own thinking
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+    }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     _pace(provider, settings.call_interval)
-    if provider == "anthropic":
-        return _anthropic(model, temp, system, user, settings.timeout_seconds, max_tokens)
-    if provider in COMPAT:
-        return _chat_compat(provider, model, temp, system, user, json_mode, settings.timeout_seconds, max_tokens)
-    raise LLMError(f"Unknown provider: {provider}. Use anthropic, openai, groq, xai, gemini or mock.")
+    data = _post(f"{base_url}/chat/completions", {"Authorization": f"Bearer {key}"}, body, settings.timeout_seconds)
+
+    choices = data.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        raise LLMError("Model response contained no choices.")
+    content = (choices[0].get("message") or {}).get("content", "")
+    return content if isinstance(content, str) else ""
 
 
 def _pace(provider: str, interval: float) -> None:
@@ -72,106 +84,51 @@ def _pace(provider: str, interval: float) -> None:
 
 
 def _post(url: str, headers: dict, body: dict, timeout: int) -> dict:
-    last = None
-    delays = [0] + RETRY_DELAYS
-    next_delay = None
-    for fallback_delay in delays:
-        delay = next_delay if next_delay is not None else fallback_delay
-        next_delay = None
-        if delay:
-            time.sleep(delay)
+    """POST with retries. Retries 429, 5xx and connection errors (timeouts only once); any other error stops at once."""
+    last = ""
+    timeouts = 0
+    wait = 0.0  # the server's own "retry after" wins over our fixed delays
+    for fallback in [0] + RETRY_DELAYS:
+        if wait or fallback:
+            time.sleep(wait or fallback)
+        wait = 0.0
         try:
             r = requests.post(url, headers=headers, json=body, timeout=timeout)
-        except requests.RequestException as e:  # network problem: retry
+        except requests.Timeout as e:  # a model that does not answer will not answer on the 5th try either
+            timeouts += 1
+            last = f"timed out after {timeout}s ({e.__class__.__name__})"
+            if timeouts >= 2:
+                break
+            continue
+        except requests.RequestException as e:  # connection problem: worth the normal retries
             last = str(e)
             continue
-        if r.status_code in (429, 500, 502, 503, 529):
+        if r.status_code == 429 or r.status_code >= 500:
             last = f"HTTP {r.status_code}: {r.text[:200]}"
-            body_lower = r.text.lower()
-            if r.status_code == 429 and any(
-                marker in body_lower
-                for marker in ("exceeded your current quota", "insufficient_quota", "billing account is not active")
-            ):
-                raise LLMError(f"HTTP 429: {r.text[:300]}", status=429)
-            retry_after = (getattr(r, "headers", None) or {}).get("Retry-After")
-            if not retry_after:
-                # Groq includes a precise wait in some 429 response bodies even when
-                # Retry-After is absent. Honor it instead of retrying too early.
-                match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s)", r.text, re.I)
-                if match:
-                    retry_after = float(match.group(1))
-                    if match.group(2).lower() == "ms":
-                        retry_after /= 1000
-            if retry_after:
-                try:
-                    next_delay = min(float(retry_after), 90)
-                except ValueError:
-                    pass
+            if r.status_code == 429 and any(m in r.text.lower() for m in OUT_OF_QUOTA):
+                raise LLMError(f"Out of quota. {last}")
+            try:
+                wait = min(float(r.headers.get("Retry-After", 0)), 90)
+            except ValueError:
+                wait = 0.0
             continue
         if r.status_code >= 400:
-            raise LLMError(f"HTTP {r.status_code}: {r.text[:300]}", status=r.status_code)
+            raise LLMError(f"HTTP {r.status_code}: {r.text[:300]}")
         return r.json()
     raise LLMError(f"Model call failed after retries: {last}")
 
 
-def _anthropic(model, temp, system, user, timeout, max_tokens=4096) -> str:
-    key = os.getenv("ANTHROPIC_API_KEY")
-    if not key:
-        raise LLMError("ANTHROPIC_API_KEY is not set.")
-    data = _post(
-        "https://api.anthropic.com/v1/messages",
-        {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        {"model": model, "max_tokens": max_tokens, "temperature": temp, "system": system,
-         "messages": [{"role": "user", "content": user}]},
-        timeout,
-    )
-    return "".join(b.get("text", "") for b in data.get("content", []))
-
-
-def _chat_compat(provider, model, temp, system, user, json_mode, timeout, max_tokens=4096) -> str:
-    key_env, default_url, url_env = COMPAT[provider]
-    key = os.getenv(key_env)
-    # Older project templates may store the Groq key under XAI_API_KEY.
-    if provider == "groq" and not key:
-        key = os.getenv("XAI_API_KEY")
-    if not key:
-        raise LLMError(f"{key_env} is not set.")
-    base = os.getenv(url_env, default_url).rstrip("/")
-    body = {"model": model, "temperature": temp, "max_tokens": max_tokens,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
-    headers = {"Authorization": f"Bearer {key}"}
-    try:
-        data = _post(f"{base}/chat/completions", headers, body, timeout)
-    except LLMError as e:
-        # Some models refuse optional settings (temperature, response_format). Retry once without them.
-        if e.status == 400 and ("response_format" in body or "temperature" in body):
-            body.pop("response_format", None)
-            body.pop("temperature", None)
-            data = _post(f"{base}/chat/completions", headers, body, timeout)
-        else:
-            raise
-    choices = data.get("choices", [])
-    if not choices or not isinstance(choices[0], dict):
-        raise LLMError("Model response contained no choices.")
-    message = choices[0].get("message") or {}
-    content = message.get("content", "")
-    return content if isinstance(content, str) else ""
-
-
 def parse_json(text: str):
     """Parse JSON from a model reply. Accepts ```json fences and extra words around the JSON."""
-    t = text.strip()
-    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.I)
+    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I)
     try:
         return json.loads(t)
     except json.JSONDecodeError:
         pass
-    starts = [i for i in (t.find("{"), t.find("[")) if i != -1]
-    if starts:
-        i = min(starts)
-        j = max(t.rfind("}"), t.rfind("]"))
-        if j > i:
+    i, j = t.find("{"), t.rfind("}")
+    if 0 <= i < j:
+        try:
             return json.loads(t[i : j + 1])
+        except json.JSONDecodeError:
+            pass
     raise ValueError("No valid JSON found in model reply.")

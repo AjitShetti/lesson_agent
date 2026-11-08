@@ -10,7 +10,7 @@ from .checks.llm_judge import JudgeError
 from .config import Settings
 from .llm import LLMError
 
-REGISTRY = {
+CODE_CHECKS = {
     "draft_nonempty": code_checks.draft_nonempty,
     "sentence_length": code_checks.sentence_length,
     "readability": code_checks.readability,
@@ -18,11 +18,6 @@ REGISTRY = {
     "jargon_defined": code_checks.jargon_defined,
     "required_sections": code_checks.required_sections,
     "lesson_length": code_checks.lesson_length,
-    "claims_grounded": llm_judge.claims_grounded,
-    "key_points_covered": llm_judge.key_points_covered,
-    "teaches_by_example": llm_judge.teaches_by_example,
-    "flow_coherent": llm_judge.flow_coherent,
-    "no_unexplained_terms": llm_judge.no_unexplained_terms,
 }
 
 
@@ -48,20 +43,41 @@ def load_context(settings: Settings) -> EvalContext:
     )
 
 
+def _run_judge(lesson: str, ctx: EvalContext) -> dict[str, dict]:
+    """Run the judge calls once each. Returns {check id: result}. A failed call fails ALL of its checks."""
+    out: dict[str, dict] = {}
+    provider_error = None
+    for ids, call in llm_judge.CALLS:
+        failure = None
+        if provider_error:  # the provider is down or out of quota: do not call it again
+            failure = {"passed": False, "reason": f"Judge provider error: {provider_error}", "evidence": "", "execution_error": True}
+        else:
+            try:
+                out.update(call(lesson, ctx))
+                continue
+            except JudgeError as e:  # fail closed
+                failure = {"passed": False, "reason": f"Judge error (treated as fail): {e}", "evidence": ""}
+            except LLMError as e:  # provider/configuration errors need a person, not another rewrite
+                provider_error = str(e)
+                failure = {"passed": False, "reason": f"Judge provider error: {e}", "evidence": "", "execution_error": True}
+        out.update({check_id: dict(failure) for check_id in ids})
+    return out
+
+
 def evaluate(lesson: str, ctx: EvalContext) -> list[dict]:
-    """Run all applicable checks; short-circuit empty drafts to avoid meaningless judge calls."""
+    """Run every check. An empty draft only gets `draft_nonempty` (nothing else can be judged)."""
+    has_text = bool(lesson.strip())
+    judged = _run_judge(lesson, ctx) if has_text else {}
     results = []
     for chk in ctx.rubric["checks"]:
-        if chk["id"] != "draft_nonempty" and not lesson.strip():
-            # An empty reply cannot be judged for meaning. Save calls and report the actual failure.
+        if chk["type"] == "code":
+            if not has_text and chk["id"] != "draft_nonempty":
+                continue
+            r = CODE_CHECKS[chk["id"]](lesson, ctx, chk.get("params", {}))
+        elif not has_text:
             continue
-        fn = REGISTRY[chk["id"]]
-        try:
-            r = fn(lesson, ctx, chk.get("params", {}))
-        except JudgeError as e:  # fail closed
-            r = {"passed": False, "reason": f"Judge error (treated as fail): {e}", "evidence": ""}
-        except LLMError as e:  # provider/configuration errors need a person, not another rewrite
-            r = {"passed": False, "reason": f"Judge provider error: {e}", "evidence": "", "execution_error": True}
+        else:
+            r = judged[chk["id"]]  # KeyError here = the rubric lists an LLM check that no judge call answers
         r.update(id=chk["id"], dimension=chk["dimension"], type=chk["type"], question=chk["question"])
         results.append(r)
     return results

@@ -14,14 +14,26 @@ try:  # optional: load .env if python-dotenv is installed
 except ImportError:  # pragma: no cover
     pass
 
+# Model used when WRITER_MODEL / JUDGE_MODEL is not set.
+DEFAULT_MODELS = {
+    "groq": "qwen/qwen3.8-27b",
+    "gemini": "gemini-flash-latest",  # "-latest" keeps working when Google retires a dated model name
+    "openai": "gpt-4o-mini",
+}
+
+
+def _env(name: str, default: str = "") -> str:
+    """Read a variable. Text after '#' is a comment, so `MODEL=   # fill me in` counts as empty."""
+    return os.getenv(name, default).split("#")[0].strip()
+
 
 @dataclass
 class Settings:
-    # Writer and judge use DIFFERENT models on purpose (see DESIGN.md).
+    # Writer and judge use DIFFERENT vendors on purpose (see DESIGN.md).
     writer_provider: str = "groq"
-    writer_model: str = "qwen/qwen3.8-27b"
+    writer_model: str = DEFAULT_MODELS["groq"]
     judge_provider: str = "gemini"
-    judge_model: str = "gemini-2.5-flash"
+    judge_model: str = DEFAULT_MODELS["gemini"]
     writer_temperature: float = 0.7
     judge_temperature: float = 0.0  # judge must be repeatable
     max_retries: int = 2  # 1 first try + 2 retries = 3 attempts at most
@@ -36,27 +48,15 @@ class Settings:
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":
-        defaults = {
-            "anthropic": "claude-sonnet-5-5",
-            "openai": "gpt-4o-mini",
-            "groq": "qwen/qwen3.8-27b",
-            "gemini": "gemini-2.5-flash",
-        }
         ov = {k: v for k, v in overrides.items() if v is not None}
-        wp = ov.get("writer_provider") or os.getenv("WRITER_PROVIDER") or cls.writer_provider
-        jp = ov.get("judge_provider") or os.getenv("JUDGE_PROVIDER") or cls.judge_provider
-        # Accept the console host if it was entered as the provider value.
-        wp = wp.strip().lower()
-        jp = jp.strip().lower()
-        aliases = {"console.groq.com": "groq", "groq.com": "groq"}
-        wp = aliases.get(wp, wp)
-        jp = aliases.get(jp, jp)
+        wp = (ov.get("writer_provider") or _env("WRITER_PROVIDER") or cls.writer_provider).lower()
+        jp = (ov.get("judge_provider") or _env("JUDGE_PROVIDER") or cls.judge_provider).lower()
         s = cls(
             writer_provider=wp,
-            writer_model=os.getenv("WRITER_MODEL") or defaults.get(wp, ""),
+            writer_model=_env("WRITER_MODEL") or DEFAULT_MODELS.get(wp, ""),
             judge_provider=jp,
-            judge_model=os.getenv("JUDGE_MODEL") or defaults.get(jp, ""),
-            max_retries=int(os.getenv("MAX_RETRIES", cls.max_retries)),
-            call_interval=float(os.getenv("CALL_INTERVAL_SECONDS", cls.call_interval)),
+            judge_model=_env("JUDGE_MODEL") or DEFAULT_MODELS.get(jp, ""),
+            max_retries=int(_env("MAX_RETRIES", str(cls.max_retries))),
+            call_interval=float(_env("CALL_INTERVAL_SECONDS", str(cls.call_interval))),
         )
         return replace(s, **ov) if ov else s

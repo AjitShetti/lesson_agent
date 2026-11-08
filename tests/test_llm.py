@@ -6,192 +6,73 @@ from lesson_agent.config import Settings
 
 
 class FakeResp:
-    def __init__(self, status, data):
-        self.status_code, self._d, self.text = status, data, str(data)
+    def __init__(self, status, data, headers=None):
+        self.status_code, self._d, self.text, self.headers = status, data, str(data), headers or {}
 
     def json(self):
         return self._d
 
 
-def test_anthropic_request_and_parse(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+def ok(text="ok"):
+    return FakeResp(200, {"choices": [{"message": {"content": text}}]})
+
+
+def capture(monkeypatch, response=None):
     seen = {}
 
     def post(url, headers, json, timeout):
         seen.update(url=url, headers=headers, body=json)
-        return FakeResp(200, {"content": [{"type": "text", "text": "Hello "}, {"type": "text", "text": "world"}]})
+        return response or ok("hi")
 
     monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(writer_provider="anthropic")
-    assert llm.complete(s, "writer", "write", "SYS", "USER") == "Hello world"
-    assert seen["url"].endswith("/v1/messages") and seen["headers"]["x-api-key"] == "k"
-    assert seen["body"]["system"] == "SYS" and seen["body"]["messages"][0]["content"] == "USER"
+    return seen
 
 
-def test_openai_request_uses_json_mode_and_zero_temperature_for_judge(monkeypatch):
+def test_judge_request_is_json_mode_zero_temperature(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "k")
-    seen = {}
-
-    def post(url, headers, json, timeout):
-        seen.update(url=url, body=json)
-        return FakeResp(200, {"choices": [{"message": {"content": "{}"}}]})
-
-    monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(judge_provider="openai")
-    llm.complete(s, "judge", "flow", "SYS", "USER", json_mode=True)
+    seen = capture(monkeypatch, ok("{}"))
+    llm.complete(Settings.from_env(judge_provider="openai"), "judge", "review", "SYS", "USER", json_mode=True)
     assert seen["url"].endswith("/chat/completions")
     assert seen["body"]["temperature"] == 0.0 and seen["body"]["response_format"] == {"type": "json_object"}
-    assert seen["body"]["max_tokens"] == 1600
+    assert seen["body"]["messages"] == [{"role": "system", "content": "SYS"}, {"role": "user", "content": "USER"}]
 
 
-def test_missing_key_gives_clear_error(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(llm.LLMError, match="ANTHROPIC_API_KEY"):
-        llm.complete(Settings.from_env(writer_provider="anthropic"), "writer", "write", "s", "u")
-
-
-def test_retry_on_rate_limit_then_succeed(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "k")
-    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
-    calls = iter([FakeResp(429, {}), FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})])
-    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: next(calls))
-    assert llm.complete(Settings.from_env(judge_provider="openai"), "judge", "t", "s", "u") == "ok"
-
-
-def test_xai_uses_its_own_key_and_url(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xk")
-    monkeypatch.setenv("OPENAI_API_KEY", "ok")
-    seen = {}
-
-    def post(url, headers, json, timeout):
-        seen.update(url=url, headers=headers, body=json)
-        return FakeResp(200, {"choices": [{"message": {"content": "hi"}}]})
-
-    monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(writer_provider="xai", writer_model="grok-x")
-    assert llm.complete(s, "writer", "write", "S", "U") == "hi"
-    assert seen["url"] == "https://api.x.ai/v1/chat/completions"
-    assert seen["headers"]["Authorization"] == "Bearer xk" and seen["body"]["model"] == "grok-x"
-
-
-def test_groq_uses_its_own_key_and_openai_compatible_url(monkeypatch):
+def test_groq_uses_its_own_key_and_url(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gk")
-    seen = {}
-
-    def post(url, headers, json, timeout):
-        seen.update(url=url, headers=headers, body=json)
-        return FakeResp(200, {"choices": [{"message": {"content": "hi"}}]})
-
-    monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(writer_provider="groq", writer_model="qwen/qwen3.8-27b")
+    seen = capture(monkeypatch)
+    s = Settings.from_env(writer_provider="groq", writer_model="some-model")
     assert llm.complete(s, "writer", "write", "S", "U") == "hi"
     assert seen["url"] == "https://api.groq.com/openai/v1/chat/completions"
-    assert seen["headers"]["Authorization"] == "Bearer gk"
+    assert seen["headers"]["Authorization"] == "Bearer gk" and seen["body"]["model"] == "some-model"
+    assert "response_format" not in seen["body"]  # the writer asks for text, not JSON
 
 
-def test_groq_accepts_legacy_xai_key_variable(monkeypatch):
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.setenv("XAI_API_KEY", "legacy-groq-key")
-    seen = {}
-
-    def post(url, headers, json, timeout):
-        seen.update(url=url, auth=headers["Authorization"])
-        return FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})
-
-    monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(writer_provider="groq", writer_model="m")
-    assert llm.complete(s, "writer", "write", "S", "U") == "ok"
-    assert seen["auth"] == "Bearer legacy-groq-key"
-
-
-def test_quota_429_fails_without_rate_limit_sleep(monkeypatch):
-    sleeps = []
-    monkeypatch.setattr(llm.time, "sleep", lambda seconds: sleeps.append(seconds))
-    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: FakeResp(429, {"error": "You exceeded your current quota; check billing."}))
-    with pytest.raises(llm.LLMError, match="current quota"):
-        llm._post("https://example.test", {}, {}, 5)
-    assert sleeps == []
-
-
-def test_gemini_uses_its_own_key_and_url_at_the_same_time_as_xai(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xk")
-    monkeypatch.setenv("GEMINI_API_KEY", "gk")
+def test_writer_and_judge_keys_do_not_mix(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    monkeypatch.setenv("GEMINI_API_KEY", "mk")
     urls = []
 
     def post(url, headers, json, timeout):
         urls.append((url, headers["Authorization"]))
-        return FakeResp(200, {"choices": [{"message": {"content": "{}"}}]})
+        return ok()
 
     monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(writer_provider="xai", writer_model="a", judge_provider="gemini", judge_model="b")
+    s = Settings.from_env(writer_provider="groq", writer_model="a", judge_provider="gemini", judge_model="b")
     llm.complete(s, "writer", "write", "S", "U")
-    llm.complete(s, "judge", "flow", "S", "U", json_mode=True)
-    assert urls[0] == ("https://api.x.ai/v1/chat/completions", "Bearer xk")
-    assert urls[1] == ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "Bearer gk")
+    llm.complete(s, "judge", "review", "S", "U", json_mode=True)
+    assert urls[0] == ("https://api.groq.com/openai/v1/chat/completions", "Bearer gk")
+    assert urls[1] == ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "Bearer mk")
 
 
-def test_400_error_retries_without_optional_settings(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gk")
-    bodies = []
-
-    def post(url, headers, json, timeout):
-        bodies.append(dict(json))
-        if "response_format" in json or "temperature" in json:
-            return FakeResp(400, {"error": "response_format not supported"})
-        return FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})
-
-    monkeypatch.setattr(llm.requests, "post", post)
-    s = Settings.from_env(judge_provider="gemini", judge_model="m")
-    assert llm.complete(s, "judge", "flow", "S", "U", json_mode=True) == "ok"
-    assert "response_format" in bodies[0] and "response_format" not in bodies[1] and "temperature" not in bodies[1]
-
-
-def test_retry_after_header_is_respected(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gk")
-    llm._last_call.clear()
-    sleeps = []
-    monkeypatch.setattr(llm.time, "sleep", lambda x: sleeps.append(x))
-
-    class R429(FakeResp):
-        headers = {"Retry-After": "7"}
-
-    calls = iter([R429(429, {}), FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})])
-    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: next(calls))
-    s = Settings.from_env(judge_provider="gemini", judge_model="m")
-    assert llm.complete(s, "judge", "t", "s", "u") == "ok"
-    assert sleeps == [7]
-
-
-def test_retry_after_in_groq_message_is_respected(monkeypatch):
-    sleeps = []
-    monkeypatch.setattr(llm.time, "sleep", lambda seconds: sleeps.append(seconds))
-    class R429(FakeResp):
-        headers = {}
-    calls = iter([
-        R429(429, {"error": {"message": "Rate limit reached due to token quota. Please try again in 217.5ms."}}),
-        FakeResp(200, {"choices": [{"message": {"content": "ok"}}]}),
-    ])
-    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: next(calls))
-    assert llm._post("https://example.test", {}, {}, 5)["choices"][0]["message"]["content"] == "ok"
-    assert sleeps == [0.2175]
-
-
-def test_call_interval_spaces_out_calls(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gk")
-    sleeps = []
-    monkeypatch.setattr(llm.time, "sleep", lambda x: sleeps.append(x))
-    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: FakeResp(200, {"choices": [{"message": {"content": "ok"}}]}))
-    llm._last_call.clear()
-    s = Settings.from_env(judge_provider="gemini", judge_model="m", call_interval=4.0)
-    llm.complete(s, "judge", "t", "s", "u")
-    llm.complete(s, "judge", "t", "s", "u")
-    assert sleeps and 0 < sleeps[0] <= 4.0
+def test_missing_key_gives_clear_error(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(llm.LLMError, match="GROQ_API_KEY"):
+        llm.complete(Settings.from_env(writer_provider="groq"), "writer", "write", "s", "u")
 
 
 def test_missing_model_gives_clear_error(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xk")
-    monkeypatch.delenv("WRITER_MODEL", raising=False)
-    s = Settings.from_env(writer_provider="xai")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    s = Settings.from_env(writer_provider="openai", writer_model="")
     with pytest.raises(llm.LLMError, match="WRITER_MODEL"):
         llm.complete(s, "writer", "write", "s", "u")
 
@@ -201,6 +82,87 @@ def test_unknown_provider_is_rejected():
         llm.complete(Settings.from_env(writer_provider="nope", writer_model="m"), "writer", "write", "s", "u")
 
 
-def test_writer_and_judge_default_to_different_models():
+def test_retry_on_rate_limit_then_succeed(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    sleeps = []
+    monkeypatch.setattr(llm.time, "sleep", sleeps.append)
+    calls = iter([FakeResp(429, "slow down"), ok()])
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: next(calls))
+    assert llm.complete(Settings.from_env(judge_provider="openai"), "judge", "t", "s", "u") == "ok"
+    assert sleeps == [2]  # first fixed delay
+
+
+def test_retry_after_header_is_respected(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk")
+    sleeps = []
+    monkeypatch.setattr(llm.time, "sleep", sleeps.append)
+    calls = iter([FakeResp(429, "slow down", {"Retry-After": "7"}), ok()])
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: next(calls))
+    assert llm.complete(Settings.from_env(judge_provider="gemini", judge_model="m"), "judge", "t", "s", "u") == "ok"
+    assert sleeps == [7]
+
+
+def test_daily_quota_429_fails_at_once_without_waiting(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(llm.time, "sleep", sleeps.append)
+    body = "Generate content requests per day limit exceeded on Free Tier."
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: FakeResp(429, body))
+    with pytest.raises(llm.LLMError, match="Out of quota"):
+        llm._post("https://example.test", {}, {}, 5)
+    assert sleeps == []
+
+
+def test_other_4xx_errors_are_not_retried(monkeypatch):
+    posts = []
+
+    def post(*args, **kwargs):
+        posts.append(1)
+        return FakeResp(404, "no such model")
+
+    monkeypatch.setattr(llm.requests, "post", post)
+    with pytest.raises(llm.LLMError, match="HTTP 404"):
+        llm._post("https://example.test", {}, {}, 5)
+    assert len(posts) == 1
+
+
+def test_call_interval_spaces_out_calls(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk")
+    sleeps = []
+    monkeypatch.setattr(llm.time, "sleep", sleeps.append)
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: ok())
+    llm._last_call.clear()
+    s = Settings.from_env(judge_provider="gemini", judge_model="m", call_interval=4.0)
+    llm.complete(s, "judge", "t", "s", "u")
+    llm.complete(s, "judge", "t", "s", "u")
+    assert sleeps and 0 < sleeps[0] <= 4.0
+
+
+def test_json_in_code_fence_is_parsed():
+    assert llm.parse_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert llm.parse_json('Here you go: {"a": 1} Thanks') == {"a": 1}
+    with pytest.raises(ValueError):
+        llm.parse_json("no json here")
+
+
+def test_writer_and_judge_default_to_different_vendors():
     s = Settings()
-    assert (s.writer_provider, s.writer_model) != (s.judge_provider, s.judge_model)
+    assert s.writer_provider != s.judge_provider
+
+
+def test_comment_in_env_value_counts_as_empty(monkeypatch):
+    monkeypatch.setenv("WRITER_MODEL", "   # exact model ID from your console")
+    assert Settings.from_env(writer_provider="groq").writer_model == "qwen/qwen3.8-27b"  # falls back to the default
+
+
+def test_timeout_is_retried_once_then_gives_up(monkeypatch):
+    posts = []
+
+    def post(*args, **kwargs):
+        posts.append(1)
+        raise llm.requests.Timeout("slow")
+
+    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(llm.requests, "post", post)
+    with pytest.raises(llm.LLMError, match="timed out"):
+        llm._post("https://example.test", {}, {}, 5)
+    assert len(posts) == 2

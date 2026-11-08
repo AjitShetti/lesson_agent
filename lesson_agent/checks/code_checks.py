@@ -74,9 +74,8 @@ _BEFORE = re.compile(r"\b(called|known as|named)\s+(?:an?\s+|the\s+)?$", re.I)
 _RESTATE = re.compile(r"^(in simple words|in other words|this means|that means|it means)\b", re.I)
 
 
-def _term_regex(entry: dict) -> re.Pattern:
-    flags = 0 if entry.get("case_sensitive") else re.I
-    return re.compile(r"(?<![\w-])" + re.escape(entry["term"]) + r"(?:s|es)?(?![\w])", flags)
+def term_regex(term: str, case_sensitive: bool = False) -> re.Pattern:
+    return re.compile(r"(?<![\w-])" + re.escape(term) + r"(?:s|es)?(?![\w])", 0 if case_sensitive else re.I)
 
 
 def _defines(sentence: str, rx: re.Pattern) -> bool:
@@ -84,6 +83,12 @@ def _defines(sentence: str, rx: re.Pattern) -> bool:
         if _AFTER.match(sentence[m.end() : m.end() + 40]) or _BEFORE.search(sentence[max(0, m.start() - 25) : m.start()]):
             return True
     return False
+
+
+def defined_nearby(sents: list[str], i: int, rx: re.Pattern) -> bool:
+    """True if sentence `i` or the one after it puts a definition next to the term."""
+    nxt = sents[i + 1] if i + 1 < len(sents) else ""
+    return _defines(sents[i], rx) or _defines(nxt, rx) or bool(_RESTATE.match(nxt))
 
 
 def jargon_defined(lesson: str, ctx, params: dict) -> dict:
@@ -95,20 +100,19 @@ def jargon_defined(lesson: str, ctx, params: dict) -> dict:
     sents = T.sentences(lesson)
     problems = []
     for entry in ctx.jargon:
-        rx = _term_regex(entry)
+        rx = term_regex(entry["term"], entry.get("case_sensitive", False))
         idx = next((i for i, s in enumerate(sents) if rx.search(s)), None)
-        if idx is None:
-            continue  # term not used: nothing to define
-        nxt = sents[idx + 1] if idx + 1 < len(sents) else ""
-        defined = _defines(sents[idx], rx) or _defines(nxt, rx) or bool(_RESTATE.match(nxt))
-        if not defined:
+        if idx is not None and not defined_nearby(sents, idx, rx):  # idx None: term not used, nothing to define
             problems.append((entry["term"], sents[idx]))
     if not problems:
         return _res(True, "Every technical term is defined where it first appears.")
     names = ", ".join(f'"{t}"' for t, _ in problems)
+    plain = {e["term"]: e["plain"] for e in ctx.jargon}
+    examples = " ".join(f'"{t} is {plain[t]}."' for t, _ in problems[:4])
     return _res(
         False,
-        f"No definition next to the first use of: {names}. Define each term in the same sentence or the next one.",
+        f"No definition next to the first use of: {names}. Define each term in the same sentence or the next one, "
+        f"in the form 'X is ...', 'X means ...', 'X (...)' or 'called X'. For example: {examples}",
         evidence=T.shorten(problems[0][1], 200),
         terms=[t for t, _ in problems],
         verified=True,

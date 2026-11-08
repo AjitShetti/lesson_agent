@@ -79,43 +79,38 @@ Rules:
 - If you are not sure, choose the stricter answer."""
 
 
-def extract_claims(lesson: str) -> str:
-    return f"""<lesson>
-{lesson}
-</lesson>
+def ground(sentences: list[str], fact_sheet: str) -> str:
+    """Judge call 1: one verdict for every lesson sentence, checked ONLY against the fact sheet.
 
-Task: list every statement in the lesson. For each one give:
-- "id": c1, c2, ...
-- "quote": the exact sentence from the lesson
-- "type": one of
-    "fact"    = a statement about what the topic is, how it works, why it is needed, or its good and bad points
-    "analogy" = a comparison to daily life
-    "example" = a made-up story, scenario, or sample data
-
-Output JSON: {{"claims": [{{"id": "c1", "quote": "...", "type": "fact"}}]}}"""
-
-
-def verify_claims(fact_sheet: str, claims: list[dict]) -> str:
+    Sentences are numbered so the judge answers with a number, not a copy of the sentence.
+    That keeps the reply short (a long lesson has about 100 sentences).
+    """
+    numbered = "\n".join(f"[{n}] {s}" for n, s in enumerate(sentences, 1))
     return f"""<fact_sheet>
 {fact_sheet}
 </fact_sheet>
 
-<claims>
-{json.dumps(claims, ensure_ascii=False, indent=1)}
-</claims>
+<lesson_sentences>
+{numbered}
+</lesson_sentences>
 
-Task: for each claim, compare it ONLY with the fact sheet. Choose a verdict:
-- "supported"    = the fact sheet says the same thing
-- "contradicted" = the fact sheet says the opposite
-- "unsupported"  = the fact sheet does not say it
-For "supported" you MUST give "sheet_quote": text copied exactly from the fact sheet.
-Do not use outside knowledge. A claim that is true in real life but missing from the sheet is "unsupported".
-Return exactly one verdict for every input claim ID. Do not omit claims. If a claim cannot be checked, mark it "unsupported" and explain why.
+Task: give exactly one verdict for EVERY numbered sentence. Choose one:
+- "not_a_fact"   = an analogy, a made-up story or sample data, or a sentence that only organizes the lesson
+                  (for example "This is the first problem." or "RAG also has limits.")
+- "supported"    = a statement about what the topic is, how it works, why it is needed, or its good and bad points,
+                  and the fact sheet says the same thing
+- "contradicted" = a statement of that kind, and the fact sheet says the opposite
+- "unsupported"  = a statement of that kind, and the fact sheet does not say it
+Compare ONLY with the fact sheet. Do not use outside knowledge. A statement that is true in real life
+but missing from the sheet is "unsupported".
+For "supported" you MUST give "sheet_quote": a short piece (at most 15 words) copied exactly from the fact sheet.
+For "contradicted" and "unsupported" you MUST give "reason" (at most 20 words).
 
-Output JSON: {{"verdicts": [{{"id": "c1", "verdict": "supported", "sheet_quote": "...", "reason": "..."}}]}}"""
+Output JSON: {{"verdicts": [{{"n": 1, "verdict": "supported", "sheet_quote": "..."}}, {{"n": 2, "verdict": "not_a_fact"}}, {{"n": 3, "verdict": "unsupported", "reason": "..."}}]}}"""
 
 
-def coverage(lesson: str, key_points: list[dict]) -> str:
+def review(lesson: str, key_points: list[dict]) -> str:
+    """Judge call 2: key points, example, flow and unexplained terms in one pass."""
     kp = json.dumps([{"id": k["id"], "text": k["text"]} for k in key_points], ensure_ascii=False, indent=1)
     return f"""<lesson>
 {lesson}
@@ -125,47 +120,28 @@ def coverage(lesson: str, key_points: list[dict]) -> str:
 {kp}
 </key_points>
 
-Task: for each key point, check every part of its text. A point with several steps is covered only if the lesson teaches every step.
-If covered, copy one or more exact lesson quotes that together show all parts. If not covered, list the missing parts.
-Output JSON: {{"points": [{{"id": "kp_what", "covered": true, "quotes": ["...", "..."], "missing_parts": [], "reason": "..."}}]}}"""
+Task: review the lesson in four parts. Every quote must be copied exactly from the lesson.
 
+1. "key_points": for each key point, check every part of its text. A point with several steps is covered only if the lesson teaches every step.
+   If covered, give one or more exact quotes that together show all parts. If not covered, list the missing parts.
+2. "example": answer three yes/no questions.
+   - has_everyday_analogy: does the lesson compare the topic to something from daily life? Quote it.
+   - has_worked_example: does the lesson follow one concrete question through the steps of the topic? Quote the start of it.
+   - example_is_correct: do the analogy and the worked example match how the topic really works, with no wrong steps?
+3. "flow": read the lesson from top to bottom as the learner. Does any sentence or section use an idea BEFORE the lesson explains it,
+   or jump in a way that would confuse the learner? If yes, set "ok" to false and quote the sentence that causes the problem.
+4. "unexplained_terms": list every technical word or phrase that the learner could not understand from this lesson alone.
+   Include a term if the lesson never explains it, or explains it only AFTER first using it.
+   Do not flag a term if the same sentence or the next sentence explains it in plain words. A short description of a process can explain its name.
+   Do not flag a common word just because it can also be technical in another context.
+   Do not flag familiar everyday analogy phrases when the nearby text explains the comparison in plain words.
+   For each real problem, quote the sentence with the first use. If there are none, use an empty list.
 
-def teaches_by_example(lesson: str) -> str:
-    return f"""<lesson>
-{lesson}
-</lesson>
-
-Task: answer three yes/no questions.
-1. has_everyday_analogy: does the lesson compare the topic to something from daily life? Quote it.
-2. has_worked_example: does the lesson follow one concrete question through the steps of the topic? Quote the start of it.
-3. example_is_correct: do the analogy and the worked example match how the topic really works, with no wrong steps?
-
-Output JSON: {{"has_everyday_analogy": {{"ok": true, "quote": "..."}},
-"has_worked_example": {{"ok": true, "quote": "..."}},
-"example_is_correct": {{"ok": true, "reason": "..."}}}}"""
-
-
-def flow(lesson: str) -> str:
-    return f"""<lesson>
-{lesson}
-</lesson>
-
-Task: read the lesson from top to bottom as the learner. Does any sentence or section use an idea BEFORE the lesson explains it,
-or jump in a way that would confuse the learner? If yes, copy the exact sentence that causes the problem.
-Output JSON: {{"ok": true, "problem_quote": "", "reason": ""}}
-Set "ok" to false if there is any such problem."""
-
-
-def unexplained_terms(lesson: str) -> str:
-    return f"""<lesson>
-{lesson}
-</lesson>
-
-Task: list every technical word or phrase that the learner could not understand from this lesson alone.
-Include a term if the lesson never explains it, or explains it only AFTER first using it.
-Do not flag a term if the same sentence or the next sentence explains it in plain words. A short description of a process can explain its name.
-Do not flag a common word just because it can also be technical in another context.
-Do not flag familiar everyday analogy phrases when the nearby text explains the comparison in plain words.
-For each real problem, quote the first-use sentence and the nearby definition you checked.
-Output JSON: {{"terms": [{{"term": "...", "quote": "exact sentence with the first use", "definition_quote": "exact nearby definition or empty string", "reason": "..."}}]}}
-If there are none, output {{"terms": []}}."""
+Output JSON: {{
+ "key_points": [{{"id": "kp_what", "covered": true, "quotes": ["..."], "missing_parts": []}}],
+ "example": {{"has_everyday_analogy": {{"ok": true, "quote": "..."}},
+              "has_worked_example": {{"ok": true, "quote": "..."}},
+              "example_is_correct": {{"ok": true, "reason": "..."}}}},
+ "flow": {{"ok": true, "problem_quote": "", "reason": ""}},
+ "unexplained_terms": [{{"term": "...", "quote": "exact sentence with the first use", "reason": "..."}}]
+}}"""
